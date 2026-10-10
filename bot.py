@@ -117,104 +117,88 @@ def json_safe(obj):
     return obj
 
 def make_txt(data: dict) -> str:
-    """Crée un fichier texte avec la structure décryptée."""
+    """Crée un fichier texte avec la structure comme Scriptoolz."""
     lines = []
-    lines.append("=" * 55)
-    lines.append(" DARKTUNNEL - STRUCTURE COMPLETE DECRYPTEE")
-    lines.append("=" * 55)
+    lines.append("@ScriptoolzDecrypt_bot")
+    lines.append("TG: https://t.me/ScriptorzDecrypt")
     lines.append("")
-    lines.append(f"Type : {data.get('type', '?')}")
-    lines.append(f"Nom : {data.get('name', '?')}")
+    lines.append("Ad: Create, share & manage VPN configs with HTTP Tweak VPN: https://t.me/HTTPTweak/9")
     lines.append("")
-    config = data.get("Config", {})
-    if not isinstance(config, dict):
-        config = {}
-    v2ray = config.get("V2RayConfig", {})
-    if not isinstance(v2ray, dict):
-        v2ray = {}
-    raw_config = v2ray.get("Config", "")
-    if isinstance(raw_config, dict):
-        xray = raw_config
-    elif isinstance(raw_config, str):
-        try:
-            xray = json.loads(raw_config)
-        except (json.JSONDecodeError, ValueError):
-            xray = {}
-    else:
-        xray = {}
-    if isinstance(xray, dict):
-        try:
-            outbounds = xray.get("outbounds", [])
-            outbound = (outbounds[0] if outbounds and isinstance(outbounds[0], dict) else {})
-            settings = outbound.get("settings", {})
-            if not isinstance(settings, dict):
-                settings = {}
-            vnext_list = settings.get("vnext", [])
-            server = (vnext_list[0] if vnext_list and isinstance(vnext_list[0], dict) else {})
-            stream = outbound.get("streamSettings", {})
-            if not isinstance(stream, dict):
-                stream = {}
-            users = server.get("users", [])
-            user = (users[0] if users and isinstance(users[0], dict) else {})
-            address = server.get("address", "?")
-            port = server.get("port", "?")
-            uuid = user.get("id", "?")
-            tls = stream.get("tlsSettings", {})
-            if not isinstance(tls, dict):
-                tls = {}
-            sni = tls.get("serverName", "")
-            ws = stream.get("wsSettings", {})
-            if not isinstance(ws, dict):
-                ws = {}
-            headers = ws.get("headers", {})
-            if not isinstance(headers, dict):
-                headers = {}
-            host = headers.get("Host", "")
-            path = ws.get("path", "")
-            if address!= "?":
-                lines.append("-" * 45)
-                lines.append("RESUME RAPIDE VLESS")
-                lines.append("-" * 45)
-                lines.append(f"Serveur : {address}:{port}")
-                lines.append(f"UUID : {uuid}")
-                lines.append(f"Path : {path}")
-                lines.append(f"SNI : {sni}")
-                lines.append(f"Header Host : {host}")
-                lines.append("")
-                if uuid!= "?":
-                    query = (
-                        "encryption=none"
-                        f"&security={'tls' if sni else 'none'}"
-                        f"&sni={quote(str(sni), safe='')}"
-                        "&type=ws"
-                        f"&host={quote(str(host), safe='')}"
-                        f"&path={quote(str(path), safe='')}"
-                    )
-                    vless = (
-                        f"vless://{uuid}@{address}:{port}"
-                        f"?{query}"
-                        f"#{quote(str(data.get('name', 'DarkTunnel')), safe='')}"
-                    )
-                    lines.append("Lien VLESS potentiel :")
-                    lines.append(vless)
-                    lines.append("")
-        except Exception:
-            logger.exception("Impossible de générer le résumé VLESS")
-    lines.append("=" * 55)
-    lines.append("STRUCTURE COMPLETE DU FICHIER DECRYPTE")
-    lines.append("=" * 55)
+    lines.append(f"Requested by: {SIGNATURE}")
     lines.append("")
-    full_structure = {
+    
+    result = {
         "type": data.get("type"),
         "name": data.get("name"),
-        "LockedAppConfig": data.get("LockedAppConfig"),
-        "Config": data.get("Config"),
+        "vlessTunnelConfig": {
+            "v2rayConfig": {
+                "mux": True
+            }
+        },
+        "encryptedLockedConfig": {}
     }
-    lines.append(json.dumps(json_safe(full_structure), indent=2, ensure_ascii=False))
-    lines.append("")
-    lines.append("=" * 55)
-    lines.append(f" {SIGNATURE}")
-    lines.append("=" * 55)
+    
+    if "LockedAppConfig" in data:
+        result["encryptedLockedConfig"]["LockedAppConfig"] = data["LockedAppConfig"]
+    
+    config = data.get("Config", {})
+    encrypted_locked = {}
+    
+    inject = config.get("InjectConfig", {})
+    if inject:
+        encrypted_locked["InjectConfig"] = {
+            "IsEncrypted": True,
+            "EncryptedMode": inject.get("Mode", "DIRECT"),
+            "EncryptedProxyHost": inject.get("ProxyHost", "localhost"),
+            "EncryptedProxyPort": inject.get("ProxyPort", "8080"),
+            "EncryptedPayload": inject.get("Payload", ""),
+            "EncryptedDnsttDnsHost": inject.get("DnsttDnsHost", "1.1.1.1"),
+            "EncryptedDnsttDnsPort": inject.get("DnsttDnsPort", "53")
+        }
+        if inject.get("ServerNameIndication"):
+            encrypted_locked["InjectConfig"]["EncryptedServerNameIndication"] = inject.get("ServerNameIndication", "")
+        if inject.get("DnsttServerName"):
+            encrypted_locked["InjectConfig"]["EncryptedDnsttServerName"] = inject.get("DnsttServerName", "")
+        if inject.get("DnsttPubkey"):
+            encrypted_locked["InjectConfig"]["EncryptedDnsttPubkey"] = inject.get("DnsttPubkey", "")
+    
+    ssh = config.get("SshConfig", {})
+    if ssh:
+        encrypted_locked["SshConfig"] = {
+            "IsEncrypted": True,
+            "IsLocked": True,
+            "EncryptedPort": ssh.get("Port", "80")
+        }
+        if ssh.get("Host"):
+            encrypted_locked["SshConfig"]["EncryptedHost"] = ssh.get("Host", "")
+        if ssh.get("Username"):
+            encrypted_locked["SshConfig"]["EncryptedUsername"] = ssh.get("Username", "")
+        if ssh.get("Password"):
+            encrypted_locked["SshConfig"]["EncryptedPassword"] = ssh.get("Password", "")
+    
+    v2ray = config.get("V2RayConfig", {})
+    if v2ray:
+        v2ray_config = v2ray.get("Config", "")
+        parsed_config = {}
+        
+        if isinstance(v2ray_config, str):
+            try:
+                parsed_config = json.loads(v2ray_config)
+            except:
+                parsed_config = v2ray_config
+        elif isinstance(v2ray_config, dict):
+            parsed_config = v2ray_config
+            
+        encrypted_locked["V2RayConfig"] = {
+            "IsEncrypted": True,
+            "IsInjectModeEnabled": v2ray.get("IsInjectModeEnabled", False),
+            "EncryptedConfig": parsed_config
+        }
+    
+    result["encryptedLockedConfig"]["EncryptedLockedConfig"] = encrypted_locked
+    
+    lines.append(json.dumps(json_safe(result), indent=4, ensure_ascii=False))
+    
     return "\n".join(lines)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -231,24 +215,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def process_and_reply(update: Update, content: str | bytes, original_name: str = "config"):
-    """Analyse une configuration et renvoie le résultat."""
+    """Analyse une configuration et renvoie uniquement le fichier.txt."""
     if update.message is None:
         return
+    
     await update.message.reply_text("⏳ Analyse et décryptage en cours...")
+    
     data = decrypt_dark(content)
     if "error" in data:
         await update.message.reply_text(f"❌ Échec du décryptage :\n{data['error']}")
         return
+    
     txt_content = make_txt(data)
     safe_name = os.path.basename(original_name or "config")
     if safe_name.lower().endswith(".dark"):
         safe_name = safe_name[:-5]
     safe_name = safe_name.replace(" ", "_")
     filename = f"{safe_name or 'config'}-decrypted.txt"
-    resume = txt_content[:3000]
-    if len(txt_content) > 3000:
-        resume += "\n\n... Consulte le fichier TXT pour la suite."
-    await update.message.reply_text(resume)
+    
     file_buffer = BytesIO(txt_content.encode("utf-8"))
     file_buffer.seek(0)
     await update.message.reply_document(
@@ -292,7 +276,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Enregistre les erreurs du bot."""
     logger.error("Erreur pendant le traitement d'une mise à jour", exc_info=context.error)
 
-# =============== CORRECTION PRINCIPALE ICI ===============
 async def run_bot():
     """Lance le bot avec gestion asyncio correcte pour Render."""
     if not BOT_TOKEN or BOT_TOKEN == "TON_TOKEN_ICI":
@@ -310,8 +293,6 @@ async def run_bot():
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
-
-    # Garde le bot actif sur Render
     await asyncio.Event().wait()
 
 def main():
@@ -323,4 +304,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-# ==========================================================
