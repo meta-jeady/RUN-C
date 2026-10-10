@@ -2,68 +2,129 @@ import os
 import json
 import base64
 import msgpack
-from io import BytesIO
-from Crypto.Cipher import AES
-from telegram import Update, InputFile
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import logging
 
-# ==================== CONFIG ====================
+from io import BytesIO
+from urllib.parse import quote
+
+from Crypto.Cipher import AES
+
+from telegram import Update, InputFile
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+
+# ==================== CONFIGURATION ====================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "TON_TOKEN_ICI")
 
 KEY_256 = b"$B&E)H@McQfThWmZq4t7w!z%C*F-JaNd"
 KEY_192 = b"F)J@NcRfUjXn2r4u7x!A%D*G"
+
 IV = bytes.fromhex("232e39185523184a5723586242200e05")
 
 SIGNATURE = "BY : kcorp tech"
-# ================================================
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+logger = logging.getLogger(__name__)
+
+# ========================================================
 
 
 def aes_decrypt(data: bytes, key: bytes) -> bytes:
-    cipher = AES.new(key, AES.MODE_CFB, IV, segment_size=128)
+    """Décrypte des données AES-CFB."""
+    cipher = AES.new(
+        key,
+        AES.MODE_CFB,
+        iv=IV,
+        segment_size=128,
+    )
     return cipher.decrypt(data)
 
 
 def clean_encrypted(obj, key=KEY_192):
-    """Décrypte récursivement tous les champs Encrypted*"""
+    """Décrypte récursivement les champs dont le nom commence par Encrypted."""
+
     if isinstance(obj, dict):
         new = {}
+
         for k, v in obj.items():
-            if k.startswith("Encrypted") and isinstance(v, (bytes, bytearray)) and len(v) > 0:
-                dec = aes_decrypt(v, key)
+
+            if (
+                isinstance(k, str)
+                and k.startswith("Encrypted")
+                and isinstance(v, (bytes, bytearray))
+                and len(v) > 0
+            ):
+                dec = aes_decrypt(bytes(v), key)
+
                 try:
                     text = dec.decode("utf-8")
-                    # Si c'est du JSON, on le parse pour l'afficher proprement
+
                     if text.startswith("{") or text.startswith("["):
                         try:
-                            new[k.replace("Encrypted", "")] = json.loads(text)
-                        except:
-                            new[k.replace("Encrypted", "")] = text
+                            new[k.replace("Encrypted", "", 1)] = json.loads(text)
+                        except (json.JSONDecodeError, ValueError):
+                            new[k.replace("Encrypted", "", 1)] = text
                     else:
-                        new[k.replace("Encrypted", "")] = text
-                except:
+                        new[k.replace("Encrypted", "", 1)] = text
+
+                except UnicodeDecodeError:
                     try:
-                        new[k.replace("Encrypted", "")] = msgpack.unpackb(dec, raw=False, strict_map_key=False)
-                    except:
+                        new[k.replace("Encrypted", "", 1)] = msgpack.unpackb(
+                            dec,
+                            raw=False,
+                            strict_map_key=False,
+                        )
+                    except Exception:
                         new[k] = dec.hex()
+
             else:
                 new[k] = clean_encrypted(v, key)
+
         return new
+
     elif isinstance(obj, list):
-        return [clean_encrypted(i, key) for i in obj]
+        return [clean_encrypted(item, key) for item in obj]
+
     else:
         return obj
 
 
-def decrypt_dark(content: str | bytes) -> dict | None:
+def decrypt_dark(content: str | bytes) -> dict:
+    """Décrypte un lien ou un contenu DarkTunnel."""
+
     try:
         if isinstance(content, bytes):
             content = content.decode("utf-8", errors="ignore")
 
         content = content.strip()
+
         if content.startswith("darktunnel://"):
             content = content[len("darktunnel://"):]
 
-        outer = json.loads(base64.b64decode(content).decode())
+        # Décodage Base64 de la structure extérieure.
+        try:
+            outer_bytes = base64.urlsafe_b64decode(
+                content + "=" * (-len(content) % 4)
+            )
+            outer = json.loads(outer_bytes.decode("utf-8"))
+
+        except Exception as exc:
+            return {
+                "error": f"Impossible de lire la structure extérieure : {exc}"
+            }
+
+        if not isinstance(outer, dict):
+            return {"error": "La structure extérieure n'est pas un objet JSON."}
 
         result = {
             "type": outer.get("type", "Unknown"),
@@ -71,95 +132,226 @@ def decrypt_dark(content: str | bytes) -> dict | None:
         }
 
         enc_b64 = outer.get("encryptedLockedConfig", "")
+
         if not enc_b64:
             return result
 
+        if isinstance(enc_b64, bytes):
+            enc_b64 = enc_b64.decode("ascii")
+
+        enc_b64 = enc_b64.strip()
         enc_b64 += "=" * (-len(enc_b64) % 4)
+
         try:
             enc = base64.urlsafe_b64decode(enc_b64)
-        except:
+        except Exception:
             enc = base64.b64decode(enc_b64)
 
-        unpacked = msgpack.unpackb(aes_decrypt(enc, KEY_256), raw=False, strict_map_key=False)
+        # Décryptage de la première couche.
+        decrypted_outer = aes_decrypt(enc, KEY_256)
+
+        unpacked = msgpack.unpackb(
+            decrypted_outer,
+            raw=False,
+            strict_map_key=False,
+        )
+
+        if not isinstance(unpacked, dict):
+            return {
+                "error": "La première structure décryptée n'est pas un dictionnaire."
+            }
 
         if "LockedAppConfig" in unpacked:
             result["LockedAppConfig"] = unpacked["LockedAppConfig"]
 
         if "EncryptedLockedConfig" in unpacked:
             elc = unpacked["EncryptedLockedConfig"]
+
             if isinstance(elc, (bytes, bytearray)):
-                inner = msgpack.unpackb(aes_decrypt(elc, KEY_192), raw=False, strict_map_key=False)
+                decrypted_inner = aes_decrypt(bytes(elc), KEY_192)
+
+                inner = msgpack.unpackb(
+                    decrypted_inner,
+                    raw=False,
+                    strict_map_key=False,
+                )
+
                 result["Config"] = clean_encrypted(inner)
 
+            elif isinstance(elc, dict):
+                result["Config"] = clean_encrypted(elc)
+
         return result
-    except Exception as e:
-        return {"error": str(e)}
+
+    except Exception as exc:
+        logger.exception("Erreur pendant le décryptage")
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def json_safe(obj):
+    """Convertit les valeurs non JSON en représentations lisibles."""
+
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return obj.hex()
+
+    if isinstance(obj, dict):
+        return {
+            str(k): json_safe(v)
+            for k, v in obj.items()
+        }
+
+    if isinstance(obj, list):
+        return [json_safe(item) for item in obj]
+
+    if isinstance(obj, tuple):
+        return [json_safe(item) for item in obj]
+
+    return obj
 
 
 def make_txt(data: dict) -> str:
-    """Crée le fichier .txt avec TOUTE la structure décryptée"""
+    """Crée un fichier texte avec la structure décryptée."""
+
     lines = []
+
     lines.append("=" * 55)
-    lines.append("     DARKTUNNEL - STRUCTURE COMPLÈTE DÉCRYPTÉE")
+    lines.append("     DARKTUNNEL - STRUCTURE COMPLETE DECRYPTEE")
     lines.append("=" * 55)
     lines.append("")
+
     lines.append(f"Type : {data.get('type', '?')}")
     lines.append(f"Nom  : {data.get('name', '?')}")
     lines.append("")
 
-    # ===== Résumé rapide VLESS si disponible =====
+    # Résumé VLESS si une configuration compatible est disponible.
     config = data.get("Config", {})
+
+    if not isinstance(config, dict):
+        config = {}
+
     v2ray = config.get("V2RayConfig", {})
+
+    if not isinstance(v2ray, dict):
+        v2ray = {}
+
     raw_config = v2ray.get("Config", "")
 
-    if isinstance(raw_config, dict) or (isinstance(raw_config, str) and raw_config.startswith("{")):
+    if isinstance(raw_config, dict):
+        xray = raw_config
+
+    elif isinstance(raw_config, str):
         try:
-            xray = raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
-            outbound = xray.get("outbounds", [{}])[0]
-            settings = outbound.get("settings", {}).get("vnext", [{}])[0]
+            xray = json.loads(raw_config)
+        except (json.JSONDecodeError, ValueError):
+            xray = {}
+
+    else:
+        xray = {}
+
+    if isinstance(xray, dict):
+        try:
+            outbounds = xray.get("outbounds", [])
+
+            outbound = (
+                outbounds[0]
+                if outbounds and isinstance(outbounds[0], dict)
+                else {}
+            )
+
+            settings = outbound.get("settings", {})
+
+            if not isinstance(settings, dict):
+                settings = {}
+
+            vnext_list = settings.get("vnext", [])
+
+            server = (
+                vnext_list[0]
+                if vnext_list and isinstance(vnext_list[0], dict)
+                else {}
+            )
+
             stream = outbound.get("streamSettings", {})
 
-            address = settings.get("address", "?")
-            port = settings.get("port", "?")
-            user = settings.get("users", [{}])[0]
+            if not isinstance(stream, dict):
+                stream = {}
+
+            users = server.get("users", [])
+
+            user = (
+                users[0]
+                if users and isinstance(users[0], dict)
+                else {}
+            )
+
+            address = server.get("address", "?")
+            port = server.get("port", "?")
             uuid = user.get("id", "?")
 
             tls = stream.get("tlsSettings", {})
+
+            if not isinstance(tls, dict):
+                tls = {}
+
             sni = tls.get("serverName", "")
+
             ws = stream.get("wsSettings", {})
-            host = ws.get("headers", {}).get("Host", "")
+
+            if not isinstance(ws, dict):
+                ws = {}
+
+            headers = ws.get("headers", {})
+
+            if not isinstance(headers, dict):
+                headers = {}
+
+            host = headers.get("Host", "")
             path = ws.get("path", "")
 
-            lines.append("-" * 45)
-            lines.append("RÉSUMÉ RAPIDE (VLESS)")
-            lines.append("-" * 45)
-            lines.append(f"Target server : {address}:{port}")
-            lines.append(f"UUID          : {uuid}")
-            lines.append(f"Path          : {path}")
-            lines.append(f"SNI           : {sni}")
-            lines.append(f"Header Host   : {host}")
-            lines.append("")
+            if address != "?":
+                lines.append("-" * 45)
+                lines.append("RESUME RAPIDE VLESS")
+                lines.append("-" * 45)
 
-            path_enc = str(path).replace("/", "%2F")
-            vless = (
-                f"vless://{uuid}@{address}:{port}"
-                f"?encryption=none&security=tls&sni={sni}"
-                f"&type=ws&host={host}&path={path_enc}"
-                f"#{data.get('name', 'DarkTunnel')}"
-            )
-            lines.append("Lien VLESS :")
-            lines.append(vless)
-            lines.append("")
-        except:
-            pass
+                lines.append(f"Serveur       : {address}:{port}")
+                lines.append(f"UUID          : {uuid}")
+                lines.append(f"Path          : {path}")
+                lines.append(f"SNI           : {sni}")
+                lines.append(f"Header Host   : {host}")
+                lines.append("")
 
-    # ===== STRUCTURE COMPLÈTE =====
+                if uuid != "?":
+                    query = (
+                        "encryption=none"
+                        f"&security={'tls' if sni else 'none'}"
+                        f"&sni={quote(str(sni), safe='')}"
+                        "&type=ws"
+                        f"&host={quote(str(host), safe='')}"
+                        f"&path={quote(str(path), safe='')}"
+                    )
+
+                    vless = (
+                        f"vless://{uuid}@{address}:{port}"
+                        f"?{query}"
+                        f"#{quote(str(data.get('name', 'DarkTunnel')), safe='')}"
+                    )
+
+                    lines.append("Lien VLESS potentiel :")
+                    lines.append(vless)
+                    lines.append("")
+
+        except Exception:
+            logger.exception("Impossible de générer le résumé VLESS")
+
+    # Structure complète.
     lines.append("=" * 55)
-    lines.append("STRUCTURE COMPLÈTE DU FICHIER DÉCRYPTÉ")
+    lines.append("STRUCTURE COMPLETE DU FICHIER DECRYPTE")
     lines.append("=" * 55)
     lines.append("")
 
-    # On affiche tout en JSON indenté
     full_structure = {
         "type": data.get("type"),
         "name": data.get("name"),
@@ -167,7 +359,14 @@ def make_txt(data: dict) -> str:
         "Config": data.get("Config"),
     }
 
-    lines.append(json.dumps(full_structure, indent=2, ensure_ascii=False, default=str))
+    lines.append(
+        json.dumps(
+            json_safe(full_structure),
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
     lines.append("")
     lines.append("=" * 55)
     lines.append(f"              {SIGNATURE}")
@@ -176,80 +375,206 @@ def make_txt(data: dict) -> str:
     return "\n".join(lines)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Commande /start."""
+
+    if update.message is None:
+        return
+
     await update.message.reply_text(
-        "🔓 *DarkTunnel Decryptor*\n\n"
-        "Envoie-moi un fichier `.dark` ou un lien `darktunnel://...`\n\n"
-        "Je décrypte et je te renvoie un fichier `.txt` avec **toute la structure**.\n\n"
-        f"_{SIGNATURE}_",
-        parse_mode="Markdown",
+        "🔓 DarkTunnel Decryptor\n\n"
+        "Envoie-moi un fichier .dark ou un lien darktunnel://...\n\n"
+        "Je vais analyser la configuration et, si le format "
+        "et les clés sont compatibles, générer un fichier .txt "
+        "avec la structure obtenue.\n\n"
+        f"{SIGNATURE}"
     )
 
 
-async def process_and_reply(update: Update, content: str | bytes, original_name: str = "config"):
-    await update.message.reply_text("⏳ Décryptage en cours...")
+async def process_and_reply(
+    update: Update,
+    content: str | bytes,
+    original_name: str = "config",
+):
+    """Analyse une configuration et renvoie le résultat."""
+
+    if update.message is None:
+        return
+
+    await update.message.reply_text("⏳ Analyse et décryptage en cours...")
 
     data = decrypt_dark(content)
 
     if "error" in data:
-        await update.message.reply_text(f"❌ Erreur : `{data['error']}`", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ Échec du décryptage :\n{data['error']}"
+        )
         return
 
     txt_content = make_txt(data)
-    filename = f"{original_name.replace('.dark', '')}-decrypted.txt"
 
-    # Résumé court dans le chat
+    # Évite de créer un nom de fichier avec des caractères de chemin.
+    safe_name = os.path.basename(original_name or "config")
+
+    if safe_name.lower().endswith(".dark"):
+        safe_name = safe_name[:-5]
+
+    safe_name = safe_name.replace(" ", "_")
+
+    filename = f"{safe_name or 'config'}-decrypted.txt"
+
+    # Résumé dans le chat.
     resume = txt_content[:3000]
+
     if len(txt_content) > 3000:
-        resume += "\n\n... (voir le fichier .txt pour la suite)"
+        resume += "\n\n... Consulte le fichier TXT pour la suite."
 
-    await update.message.reply_text(f"```\n{resume}\n```", parse_mode="Markdown")
+    # Le texte brut évite les erreurs Markdown dues aux caractères spéciaux.
+    await update.message.reply_text(resume)
 
-    # Fichier .txt complet
+    # Envoi du fichier texte complet.
+    file_buffer = BytesIO(txt_content.encode("utf-8"))
+    file_buffer.seek(0)
+
     await update.message.reply_document(
-        document=InputFile(BytesIO(txt_content.encode("utf-8")), filename=filename),
-        caption=f"📁 Structure complète décryptée\n\n{SIGNATURE}",
+        document=InputFile(
+            file_buffer,
+            filename=filename,
+        ),
+        caption=f"📁 Structure analysée\n{SIGNATURE}",
     )
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Traite les liens reçus en message."""
+
+    if update.message is None:
+        return
+
     texte = update.message.text or ""
+
     if "darktunnel://" not in texte.lower():
-        await update.message.reply_text("Envoie un lien `darktunnel://...` ou un fichier `.dark`")
+        await update.message.reply_text(
+            "Envoie un lien darktunnel://... "
+            "ou un fichier .dark."
+        )
         return
-    await process_and_reply(update, texte, "darktunnel")
+
+    # Extrait le lien, même si le message contient du texte autour.
+    start_index = texte.lower().find("darktunnel://")
+    lien = texte[start_index:].strip()
+
+    # Retire les espaces et retours à la ligne en fin de lien.
+    lien = lien.split()[0].strip()
+
+    await process_and_reply(
+        update,
+        lien,
+        "darktunnel",
+    )
 
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_document(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Traite les fichiers envoyés au bot."""
+
+    if update.message is None or update.message.document is None:
+        return
+
     doc = update.message.document
-    if not doc:
+    filename = doc.file_name or "config"
+
+    if not filename.lower().endswith(".dark"):
+        await update.message.reply_text(
+            "❌ Envoie un fichier portant l'extension .dark."
+        )
         return
 
-    filename = (doc.file_name or "").lower()
-    if not (filename.endswith(".dark") or "dark" in filename):
-        await update.message.reply_text("Envoie un fichier `.dark`")
-        return
+    try:
+        telegram_file = await context.bot.get_file(doc.file_id)
 
-    file = await context.bot.get_file(doc.file_id)
-    buffer = BytesIO()
-    await file.download_to_memory(buffer)
-    content = buffer.getvalue()
+        buffer = BytesIO()
 
-    name = doc.file_name or "config"
-    await process_and_reply(update, content, name)
+        await telegram_file.download_to_memory(buffer)
+
+        content = buffer.getvalue()
+
+        await process_and_reply(
+            update,
+            content,
+            filename,
+        )
+
+    except Exception as exc:
+        logger.exception("Erreur lors du téléchargement du document")
+
+        await update.message.reply_text(
+            f"❌ Impossible de traiter le fichier : "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    """Enregistre les erreurs du bot."""
+
+    logger.error(
+        "Erreur pendant le traitement d'une mise à jour",
+        exc_info=context.error,
+    )
+
 
 def main():
+    """Initialise et lance le bot Telegram."""
+
     if not BOT_TOKEN or BOT_TOKEN == "TON_TOKEN_ICI":
-        print("❌ BOT_TOKEN non défini")
+        logger.error(
+            "BOT_TOKEN non défini. Configure cette variable "
+            "dans les variables d'environnement de Render."
+        )
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    print(f"🔓 DarkTunnel Decryptor démarré... {SIGNATURE}")
-    app.run_polling(drop_pending_updates=True)
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    # CORRECTION : aucun antislash avant ~filters.COMMAND.
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.Document.ALL,
+            handle_document,
+        )
+    )
+
+    app.add_error_handler(error_handler)
+
+    logger.info(
+        "DarkTunnel Decryptor démarre... %s",
+        SIGNATURE,
+    )
+
+    app.run_polling(
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
