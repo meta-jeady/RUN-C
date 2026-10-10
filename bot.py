@@ -238,7 +238,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = doc.file_name or "config"
     await process_and_reply(update, content, name)
 
-
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "TON_TOKEN_ICI":
         print("❌ BOT_TOKEN non défini")
