@@ -24,13 +24,22 @@ def aes_decrypt(data: bytes, key: bytes) -> bytes:
 
 
 def clean_encrypted(obj, key=KEY_192):
+    """Décrypte récursivement tous les champs Encrypted*"""
     if isinstance(obj, dict):
         new = {}
         for k, v in obj.items():
             if k.startswith("Encrypted") and isinstance(v, (bytes, bytearray)) and len(v) > 0:
                 dec = aes_decrypt(v, key)
                 try:
-                    new[k.replace("Encrypted", "")] = dec.decode("utf-8")
+                    text = dec.decode("utf-8")
+                    # Si c'est du JSON, on le parse pour l'afficher proprement
+                    if text.startswith("{") or text.startswith("["):
+                        try:
+                            new[k.replace("Encrypted", "")] = json.loads(text)
+                        except:
+                            new[k.replace("Encrypted", "")] = text
+                    else:
+                        new[k.replace("Encrypted", "")] = text
                 except:
                     try:
                         new[k.replace("Encrypted", "")] = msgpack.unpackb(dec, raw=False, strict_map_key=False)
@@ -88,22 +97,24 @@ def decrypt_dark(content: str | bytes) -> dict | None:
 
 
 def make_txt(data: dict) -> str:
+    """Crée le fichier .txt avec TOUTE la structure décryptée"""
     lines = []
-    lines.append("=" * 50)
-    lines.append("       DARKTUNNEL - CONFIG DÉCRYPTÉE")
-    lines.append("=" * 50)
+    lines.append("=" * 55)
+    lines.append("     DARKTUNNEL - STRUCTURE COMPLÈTE DÉCRYPTÉE")
+    lines.append("=" * 55)
     lines.append("")
     lines.append(f"Type : {data.get('type', '?')}")
     lines.append(f"Nom  : {data.get('name', '?')}")
     lines.append("")
 
+    # ===== Résumé rapide VLESS si disponible =====
     config = data.get("Config", {})
     v2ray = config.get("V2RayConfig", {})
     raw_config = v2ray.get("Config", "")
 
-    if isinstance(raw_config, str) and raw_config.startswith("{"):
+    if isinstance(raw_config, dict) or (isinstance(raw_config, str) and raw_config.startswith("{")):
         try:
-            xray = json.loads(raw_config)
+            xray = raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
             outbound = xray.get("outbounds", [{}])[0]
             settings = outbound.get("settings", {}).get("vnext", [{}])[0]
             stream = outbound.get("streamSettings", {})
@@ -119,53 +130,49 @@ def make_txt(data: dict) -> str:
             host = ws.get("headers", {}).get("Host", "")
             path = ws.get("path", "")
 
-            lines.append("-" * 40)
-            lines.append("CHAMPS DARKTUNNEL")
-            lines.append("-" * 40)
-            lines.append("")
-            lines.append("Target server :")
-            lines.append(f"{address}:{port}")
-            lines.append("")
-            lines.append("UUID :")
-            lines.append(uuid)
-            lines.append("")
-            lines.append("Path :")
-            lines.append(path)
-            lines.append("")
-            lines.append("Server Name Indication (SNI) :")
-            lines.append(sni)
-            lines.append("")
-            lines.append("Header Host :")
-            lines.append(host)
-            lines.append("")
-            lines.append("-" * 40)
-            lines.append("LIEN VLESS COMPLET")
-            lines.append("-" * 40)
+            lines.append("-" * 45)
+            lines.append("RÉSUMÉ RAPIDE (VLESS)")
+            lines.append("-" * 45)
+            lines.append(f"Target server : {address}:{port}")
+            lines.append(f"UUID          : {uuid}")
+            lines.append(f"Path          : {path}")
+            lines.append(f"SNI           : {sni}")
+            lines.append(f"Header Host   : {host}")
             lines.append("")
 
-            path_enc = path.replace("/", "%2F")
+            path_enc = str(path).replace("/", "%2F")
             vless = (
                 f"vless://{uuid}@{address}:{port}"
                 f"?encryption=none&security=tls&sni={sni}"
                 f"&type=ws&host={host}&path={path_enc}"
                 f"#{data.get('name', 'DarkTunnel')}"
             )
+            lines.append("Lien VLESS :")
             lines.append(vless)
             lines.append("")
+        except:
+            pass
 
-        except Exception as e:
-            lines.append(f"Erreur extraction : {e}")
-            lines.append("")
-            lines.append("Config brute :")
-            lines.append(str(raw_config)[:2000])
-    else:
-        lines.append("Contenu décrypté :")
-        lines.append(json.dumps(config, indent=2, ensure_ascii=False)[:3000])
-
+    # ===== STRUCTURE COMPLÈTE =====
+    lines.append("=" * 55)
+    lines.append("STRUCTURE COMPLÈTE DU FICHIER DÉCRYPTÉ")
+    lines.append("=" * 55)
     lines.append("")
-    lines.append("=" * 50)
+
+    # On affiche tout en JSON indenté
+    full_structure = {
+        "type": data.get("type"),
+        "name": data.get("name"),
+        "LockedAppConfig": data.get("LockedAppConfig"),
+        "Config": data.get("Config"),
+    }
+
+    lines.append(json.dumps(full_structure, indent=2, ensure_ascii=False, default=str))
+    lines.append("")
+    lines.append("=" * 55)
     lines.append(f"              {SIGNATURE}")
-    lines.append("=" * 50)
+    lines.append("=" * 55)
+
     return "\n".join(lines)
 
 
@@ -173,7 +180,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔓 *DarkTunnel Decryptor*\n\n"
         "Envoie-moi un fichier `.dark` ou un lien `darktunnel://...`\n\n"
-        "Je décrypte et je te renvoie un fichier `.txt` avec toutes les infos.\n\n"
+        "Je décrypte et je te renvoie un fichier `.txt` avec **toute la structure**.\n\n"
         f"_{SIGNATURE}_",
         parse_mode="Markdown",
     )
@@ -191,12 +198,17 @@ async def process_and_reply(update: Update, content: str | bytes, original_name:
     txt_content = make_txt(data)
     filename = f"{original_name.replace('.dark', '')}-decrypted.txt"
 
-    resume = txt_content[:3500]
+    # Résumé court dans le chat
+    resume = txt_content[:3000]
+    if len(txt_content) > 3000:
+        resume += "\n\n... (voir le fichier .txt pour la suite)"
+
     await update.message.reply_text(f"```\n{resume}\n```", parse_mode="Markdown")
 
+    # Fichier .txt complet
     await update.message.reply_document(
         document=InputFile(BytesIO(txt_content.encode("utf-8")), filename=filename),
-        caption=f"📁 Fichier décrypté\n\n{SIGNATURE}",
+        caption=f"📁 Structure complète décryptée\n\n{SIGNATURE}",
     )
 
 
