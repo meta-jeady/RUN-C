@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import base64
@@ -330,7 +331,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print(f"🔓 Multi Decryptor démarré... {SIGNATURE}")
-    app.run_polling(drop_pending_updates=True)
+    return app
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main().run_polling(drop_pending_updates=True))
