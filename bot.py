@@ -14,10 +14,8 @@ KEY_256 = b"$B&E)H@McQfThWmZq4t7w!z%C*F-JaNd"
 KEY_192 = b"F)J@NcRfUjXn2r4u7x!A%D*G"
 IV = bytes.fromhex("232e39185523184a5723586242200e05")
 
-
 def aes_decrypt(data, key):
     return AES.new(key, AES.MODE_CFB, IV, segment_size=128).decrypt(data)
-
 
 def to_str(v):
     if isinstance(v, (bytes, bytearray)):
@@ -26,7 +24,6 @@ def to_str(v):
         except:
             return v.hex()
     return v
-
 
 def clean_value(v, key=KEY_192):
     if not isinstance(v, (bytes, bytearray)) or len(v) == 0:
@@ -46,7 +43,6 @@ def clean_value(v, key=KEY_192):
         except:
             return dec.hex()
 
-
 def clean_section(section):
     if not isinstance(section, dict):
         return to_str(section)
@@ -61,7 +57,6 @@ def clean_section(section):
         else:
             out[k] = to_str(v)
     return out
-
 
 def decrypt_dark(content):
     try:
@@ -108,15 +103,13 @@ def decrypt_dark(content):
     except Exception as e:
         return {"error": str(e)}
 
-
 def make_dark_txt(data):
     lines = []
     lines.append("=" * 55)
-    lines.append("  DARKTUNNEL - DÉCRYPTÉ EN CLAIR")
+    lines.append(" DARKTUNNEL - DECRYPTE EN CLAIR")
     lines.append("=" * 55)
     lines.append("")
 
-    # Résumé VLESS
     try:
         inner = data.get("encryptedLockedConfig", {}).get("EncryptedLockedConfig", {})
         v2ray = inner.get("V2RayConfig", {})
@@ -134,13 +127,13 @@ def make_dark_txt(data):
             host = stream.get("wsSettings", {}).get("headers", {}).get("Host", "")
             path = stream.get("wsSettings", {}).get("path", "")
             lines.append("-" * 45)
-            lines.append("RÉSUMÉ VLESS")
+            lines.append("RESUME VLESS")
             lines.append("-" * 45)
             lines.append(f"Target server : {addr}:{port}")
-            lines.append(f"UUID          : {uuid}")
-            lines.append(f"Path          : {path}")
-            lines.append(f"SNI           : {sni}")
-            lines.append(f"Header Host   : {host}")
+            lines.append(f"UUID : {uuid}")
+            lines.append(f"Path : {path}")
+            lines.append(f"SNI : {sni}")
+            lines.append(f"Header Host : {host}")
             lines.append("")
             pe = str(path).replace("/", "%2F")
             lines.append("Lien VLESS :")
@@ -150,16 +143,15 @@ def make_dark_txt(data):
         pass
 
     lines.append("=" * 55)
-    lines.append("STRUCTURE COMPLÈTE")
+    lines.append("STRUCTURE COMPLETE")
     lines.append("=" * 55)
     lines.append("")
     lines.append(json.dumps(data, indent=4, ensure_ascii=False, default=str))
     lines.append("")
     lines.append("=" * 55)
-    lines.append(f"  {SIGNATURE}")
+    lines.append(f" {SIGNATURE}")
     lines.append("=" * 55)
     return "\n".join(lines)
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -168,7 +160,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"_{SIGNATURE}_",
         parse_mode="Markdown",
     )
-
 
 async def process(update, content, name="config"):
     await update.message.reply_text("⏳ Décryptage...")
@@ -183,7 +174,6 @@ async def process(update, content, name="config"):
         caption=f"✅ DarkTunnel décrypté\n\n{SIGNATURE}",
     )
 
-
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc:
@@ -197,14 +187,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await f.download_to_memory(buf)
     await process(update, buf.getvalue(), doc.file_name or "config")
 
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     t = update.message.text or ""
     if "darktunnel://" not in t.lower():
         await update.message.reply_text("Envoie un fichier `.dark` ou un lien `darktunnel://`")
         return
     await process(update, t, "darktunnel")
-
 
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "TON_TOKEN_ICI":
@@ -213,10 +201,9 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print(f"🔓 DarkTunnel Decryptor démarré... {SIGNATURE}")
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
