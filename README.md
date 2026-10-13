@@ -1,19 +1,22 @@
-# DarkTunnel Decryptor Bot
+# KCORP-TECH Bot
 
-Bot Telegram qui décrypte les fichiers `.dark` et génère un fichier `.txt` clair.
+Bot Telegram public qui génère automatiquement des configurations **VLESS** à partir de liens SSO Google Skills.
 
 ## Fonctionnalités
 
-- Accepte fichier `.dark` ou lien `darktunnel://`
-- Décrypte complètement la config
-- Affiche : Target server, UUID, Path, SNI, Header Host
-- Reconstruit le lien VLESS
-- Envoie un fichier `.txt` téléchargeable
+- Reçoit un lien SSO Google Skills
+- Déploie automatiquement un service Cloud Run avec l'image `docker.io/metajeady/kcorp1`
+- Génère une config VLESS personnalisée
+- Envoie aussi un fichier JSON
+- Système de limite anti-abus (3/heure - 8/jour)
 
-## Déploiement Render
+## Déploiement sur Render
 
-1. Repo GitHub avec les fichiers
-2. New → Background Worker
-3. Build : `pip install -r requirements.txt`
-4. Start : `python bot.py`
-5. Environment :
+### 1. Fichiers nécessaires
+- `bot.py`
+- `requirements.txt`
+- `Dockerfile`
+
+### 2. Variables d'environnement
+
+Sur Render, ajoute uniquement :
